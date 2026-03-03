@@ -4,9 +4,17 @@
             <a href="/">IDEA **</a>
         </div>
         <div class="flex gap-x-5">
-            <a href="/login">Login</a>
-            <a href="/register" class="btn">Register</a>
+            @guest
+                <a href="{{ route('login') }}">Login</a>
+                <a href="{{ route('register') }}" class="btn">Register</a>
+            @endguest
 
+            @auth
+                <form action="{{ route('logout') }}" method="post">
+                    @csrf
+                    <button type="submit" class="btn">Logout</button>
+                </form>
+            @endauth
         </div>
     </div>
 </nav>
