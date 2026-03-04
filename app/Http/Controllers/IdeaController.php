@@ -4,63 +4,132 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreideaRequest;
 use App\Http\Requests\UpdateideaRequest;
-use App\Models\idea;
+use App\IdeaStatus;
+use App\Models\Idea;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\View\View;
 
 class IdeaController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
+    public function index(Request $request): View
     {
-        //
+        $this->authorize('viewAny', Idea::class);
+
+        $statusFilter = $request->string('status')->toString();
+        $validStatusFilter = IdeaStatus::tryFrom($statusFilter);
+
+        $totalIdeasCount = $request->user()->ideas()->count();
+        $ideasQuery = $request->user()->ideas()->latest();
+
+        if ($validStatusFilter !== null) {
+            $ideasQuery->where('status', $validStatusFilter->value);
+        }
+
+        $ideas = $ideasQuery->paginate(9)->withQueryString();
+
+        $statusCounts = $request->user()
+            ->ideas()
+            ->selectRaw('status, count(*) as aggregate')
+            ->groupBy('status')
+            ->pluck('aggregate', 'status');
+
+        return view('ideas.index', [
+            'ideas' => $ideas,
+            'statuses' => IdeaStatus::cases(),
+            'statusFilter' => $validStatusFilter?->value,
+            'statusCounts' => $statusCounts,
+            'totalIdeasCount' => $totalIdeasCount,
+        ]);
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
+    public function create(): View
     {
-        //
+        $this->authorize('create', Idea::class);
+
+        return view('ideas.create', [
+            'statuses' => IdeaStatus::cases(),
+        ]);
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(StoreideaRequest $request)
+    public function store(StoreideaRequest $request): RedirectResponse
     {
-        //
+        $this->authorize('create', Idea::class);
+
+        $validated = $request->validated();
+        $links = collect($validated['links'] ?? [])->filter(fn (?string $link): bool => filled($link))->values()->all();
+
+        $idea = $request->user()->ideas()->create([
+            'title' => $validated['title'],
+            'description' => $validated['description'] ?? null,
+            'status' => $validated['status'],
+            'links' => $links,
+            'image_path' => $request->file('image')?->store('ideas', 'public'),
+        ]);
+
+        return redirect()->route('ideas.show', $idea)->with('success', 'Idea created successfully.');
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(idea $idea)
+    public function show(Idea $idea): View
     {
-        //
+        $this->authorize('view', $idea);
+
+        return view('ideas.show', [
+            'idea' => $idea,
+        ]);
     }
 
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(idea $idea)
+    public function edit(Idea $idea): View
     {
-        //
+        $this->authorize('update', $idea);
+
+        return view('ideas.edit', [
+            'idea' => $idea,
+            'statuses' => IdeaStatus::cases(),
+        ]);
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(UpdateideaRequest $request, idea $idea)
+    public function update(UpdateideaRequest $request, Idea $idea): RedirectResponse
     {
-        //
+        $this->authorize('update', $idea);
+
+        $validated = $request->validated();
+        $links = collect($validated['links'] ?? [])->filter(fn (?string $link): bool => filled($link))->values()->all();
+        $imagePath = $idea->image_path;
+
+        if ($request->hasFile('image')) {
+            if ($idea->image_path !== null) {
+                Storage::disk('public')->delete($idea->image_path);
+            }
+
+            $imagePath = $request->file('image')->store('ideas', 'public');
+        } elseif ($request->boolean('remove_image') && $idea->image_path !== null) {
+            Storage::disk('public')->delete($idea->image_path);
+            $imagePath = null;
+        }
+
+        $idea->update([
+            'title' => $validated['title'],
+            'description' => $validated['description'] ?? null,
+            'status' => $validated['status'],
+            'links' => $links,
+            'image_path' => $imagePath,
+        ]);
+
+        return redirect()->route('ideas.show', $idea)->with('success', 'Idea updated successfully.');
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(idea $idea)
+    public function destroy(Idea $idea): RedirectResponse
     {
-        //
+        $this->authorize('delete', $idea);
+
+        if ($idea->image_path !== null) {
+            Storage::disk('public')->delete($idea->image_path);
+        }
+
+        $idea->delete();
+
+        return redirect()->route('ideas.index')->with('success', 'Idea deleted successfully.');
     }
 }
